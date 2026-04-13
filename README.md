@@ -2,7 +2,7 @@
 
 Deploys [aws-s3-mcp](https://github.com/samuraikun/aws-s3-mcp) behind an nginx bearer-token auth gateway.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/aws-s3-mcp?referralCode=C3Uv6n&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 ## 🏗️ Architecture
 
@@ -16,14 +16,14 @@ client ──Authorization: Bearer <key>──► gateway (nginx, public)
 Two Railway services:
 
 - **`gateway`** — `nginx:alpine`, exposes a public domain, validates the `Authorization: Bearer <key>` header against `API_KEYS`, and forwards to the mcp service via Railway's private network.
-- **`mcp`** — pinned to `ghcr.io/samuraikun/aws-s3-mcp:v0.4.0`. **Do not give this service a public domain**; it is only reachable at `mcp.railway.internal:3000`.
+- **`mcp`** — builds [samuraikun/aws-s3-mcp](https://github.com/samuraikun/aws-s3-mcp) from source at tag `v0.4.0`. **Do not give this service a public domain**; it is only reachable at `mcp.railway.internal:3000`.
 
 ## ✨ Features
 
 - Bearer-token auth with a comma-separated allowlist of keys
 - SSE / streamable HTTP passthrough (`/sse`, `/mcp`)
 - Unauthenticated `/health` passthrough for Railway healthchecks
-- Zero custom code — gateway is plain nginx, mcp is the upstream prebuilt image
+- Gateway is plain nginx; mcp is the upstream project built from source at a pinned tag
 
 ## 💁‍♀️ How to use
 
@@ -49,10 +49,11 @@ Two Railway services:
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `AWS_ACCESS_KEY_ID` | yes | AWS access key with read access to the target buckets |
-| `AWS_SECRET_ACCESS_KEY` | yes | AWS secret matching the access key |
-| `S3_BUCKETS` | recommended | Comma-separated allowlist of bucket names. If unset, no buckets are exposed. |
-| `AWS_REGION` | no | Defaults to `us-east-1` |
+| `AWS_ACCESS_KEY_ID` | yes | Access key for your S3-compatible storage. For Railway's built-in bucket, reference the bucket's `AWS_ACCESS_KEY_ID`. |
+| `AWS_SECRET_ACCESS_KEY` | yes | Secret for your S3-compatible storage. For Railway's built-in bucket, reference the bucket's `AWS_SECRET_ACCESS_KEY`. |
+| `S3_BUCKETS` | yes | Comma-separated allowlist of bucket names the MCP is permitted to touch. For Railway's built-in bucket, reference the bucket's `AWS_S3_BUCKET_NAME`. If empty, no buckets are exposed. |
+| `AWS_ENDPOINT` | no | S3 endpoint URL. For Railway's built-in bucket, reference the bucket's `AWS_ENDPOINT_URL`. For real AWS, leave empty. |
+| `AWS_REGION` | no | Region of the target buckets. For Railway's built-in bucket, reference the bucket's `AWS_DEFAULT_REGION` (`auto`). For real AWS, use `us-east-1`/`eu-west-3`/etc. |
 | `S3_MAX_BUCKETS` | no | Maximum number of buckets to list (default `5`) |
 
 ## 📝 Notes
