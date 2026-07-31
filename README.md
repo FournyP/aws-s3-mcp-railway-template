@@ -64,3 +64,7 @@ Two Railway services:
 - **Invalid / missing token:** the gateway returns `401` with a `WWW-Authenticate: Bearer realm="aws-s3-mcp"` header.
 - **Do not expose the mcp service publicly.** All traffic should enter through the gateway.
 - Upstream repo: https://github.com/samuraikun/aws-s3-mcp
+
+## ⚖️ License
+
+[MIT](LICENSE)
