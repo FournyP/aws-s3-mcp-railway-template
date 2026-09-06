@@ -2,7 +2,7 @@
 set -eu
 
 : "${API_KEYS:?API_KEYS is required (comma-separated list of allowed bearer tokens)}"
-: "${MCP_HOST:=mcp.railway.internal}"
+: "${MCP_HOST:=aws-s3-mcp.railway.internal}"
 : "${MCP_PORT:=3000}"
 : "${PORT:=80}"
 

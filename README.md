@@ -7,16 +7,16 @@ Deploys [aws-s3-mcp](https://github.com/samuraikun/aws-s3-mcp) behind an nginx b
 ## 🏗️ Architecture
 
 ```
-client ──Authorization: Bearer <key>──► gateway (nginx, public)
+client ──Authorization: Bearer <key>──► aws-s3-mcp-gateway (nginx, public)
                                               │
                                               ▼ private network
-                                        mcp (aws-s3-mcp, private) ──► S3
+                                    aws-s3-mcp (private) ──► S3
 ```
 
 Two Railway services:
 
-- **`gateway`** — `nginx:alpine`, exposes a public domain, validates the `Authorization: Bearer <key>` header against `API_KEYS`, and forwards to the mcp service via Railway's private network.
-- **`mcp`** — builds [samuraikun/aws-s3-mcp](https://github.com/samuraikun/aws-s3-mcp) from source at tag `v0.4.0`. **Do not give this service a public domain**; it is only reachable at `mcp.railway.internal:3000`.
+- **`aws-s3-mcp-gateway`** — `nginx:1.29.8-alpine`, exposes a public domain, validates the `Authorization: Bearer <key>` header against `API_KEYS`, and forwards to the mcp service via Railway's private network.
+- **`aws-s3-mcp`** — builds [samuraikun/aws-s3-mcp](https://github.com/samuraikun/aws-s3-mcp) from source at tag `v0.4.0`. **Do not give this service a public domain**; it is only reachable at `aws-s3-mcp.railway.internal:3000`.
 
 ## ✨ Features
 
@@ -42,7 +42,7 @@ Two Railway services:
 | Variable | Required | Description |
 | --- | --- | --- |
 | `API_KEYS` | yes | Comma-separated list of allowed bearer tokens. Allowed chars per key: `A-Z a-z 0-9 . _ ~ + / = -` |
-| `MCP_HOST` | no | Defaults to `mcp.railway.internal`. Only override if you rename the mcp service. |
+| `MCP_HOST` | no | Defaults to `aws-s3-mcp.railway.internal`. Only override if you rename the mcp service. |
 | `MCP_PORT` | no | Defaults to `3000`. |
 
 ### MCP service
