@@ -1,0 +1,124 @@
+# Builds both images this template ships (gateway and mcp) on every PR and on
+# main, and exercises the gateway's runtime-rendered nginx config.
+name: docker-build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [gateway, mcp]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image }}
+          push: false
+          load: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # The gateway's nginx config is rendered at container start, not at build
+  # time, so a broken template passes the image build and only fails once it
+  # reaches Railway. This job starts the real image and asserts the routing
+  # and auth behaviour the gateway is responsible for.
+  gateway-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build gateway image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: gateway
+          push: false
+          load: true
+          tags: gateway:ci
+          cache-from: type=gha,scope=gateway
+
+      - name: Start stub upstream
+        run: |
+          docker network create ci-net
+          mkdir -p stub
+          # /health is proxied straight through to the upstream, so the stub
+          # has to answer it as well as the MCP route.
+          printf 'upstream root\n' > stub/index.html
+          printf 'upstream mcp\n' > stub/mcp
+          printf 'upstream health\n' > stub/health
+          docker run -d --name mcp --network ci-net \
+            -v "$PWD/stub:/usr/share/nginx/html:ro" \
+            nginx:1.29.8-alpine
+
+      - name: Start gateway
+        run: |
+          docker run -d --name gw --network ci-net \
+            -e API_KEYS=goodkeyone,goodkeytwo \
+            -e MCP_HOST=mcp \
+            -e MCP_PORT=80 \
+            -e PORT=8080 \
+            -p 8080:8080 gateway:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/health >/dev/null
+
+      - name: nginx config is valid
+        run: docker exec gw nginx -t
+
+      - name: Assertions
+        run: |
+          set -eu
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+
+          echo "health is unauthenticated and proxied to the upstream"
+          [ "$(code http://localhost:8080/health)" = 200 ]
+          curl -s http://localhost:8080/health | grep -q 'upstream health'
+
+          echo "no credential is rejected"
+          [ "$(code http://localhost:8080/mcp)" = 401 ]
+
+          echo "a bad bearer is rejected"
+          [ "$(code -H 'Authorization: Bearer nope' http://localhost:8080/mcp)" = 401 ]
+
+          echo "a good bearer reaches the upstream"
+          [ "$(code -H 'Authorization: Bearer goodkeyone' http://localhost:8080/mcp)" = 200 ]
+          curl -s -H 'Authorization: Bearer goodkeyone' http://localhost:8080/mcp | grep -q 'upstream mcp'
+
+          echo "the second key works too"
+          [ "$(code -H 'Authorization: Bearer goodkeytwo' http://localhost:8080/mcp)" = 200 ]
+
+          echo "OAuth discovery is 404 so clients fall back to bearer auth"
+          for p in /.well-known/oauth-protected-resource \
+                   /.well-known/oauth-authorization-server \
+                   /.well-known/openid-configuration \
+                   /register; do
+            [ "$(code "http://localhost:8080$p")" = 404 ]
+          done
+
+      - name: Invalid API_KEYS characters are refused at startup
+        run: |
+          set -eu
+          # The keys are interpolated into an nginx map regex, so the entrypoint
+          # rejects anything outside its charset rather than render a broken
+          # config that would let every request through.
+          ! docker run --rm --network ci-net \
+            -e 'API_KEYS=bad|key' \
+            -e MCP_HOST=mcp -e MCP_PORT=80 -e PORT=8080 \
+            gateway:ci
+
+      - name: Gateway logs on failure
+        if: failure()
+        run: docker logs gw || true
