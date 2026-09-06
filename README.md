@@ -35,6 +35,39 @@ Two Railway services:
    curl -H "Authorization: Bearer <your-key>" https://<gateway-domain>/mcp
    ```
 
+## 🧱 Infrastructure as Code
+
+`.railway/railway.ts` defines the whole project — both services and every variable.
+
+```bash
+railway link
+npm install
+
+# First apply only; later runs omit these and preserve() keeps the values.
+export API_KEYS=$(openssl rand -hex 32)
+export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
+export S3_BUCKETS=my-bucket,other-bucket
+
+npm run plan     # read the diff before applying
+npm run apply
+railway domain --service aws-s3-mcp-gateway
+```
+
+Give the domain to the gateway only. `aws-s3-mcp` has no authentication of its own and
+must stay private.
+
+Needs the Railway CLI 5.42.1 or newer: the IaC engine ships in the CLI, not in the npm
+package. If you forked this repo, change `REPO` in `railway.ts` to your own before applying.
+
+Link it to a project dedicated to this template. An apply deletes every resource **and
+every variable** the file does not declare, so from then on variables live in `railway.ts`,
+not the dashboard. Do not point it at a project created from the deploy button — the
+service names differ, and a mismatch is a delete and recreate, not a rename.
+
+## ⬆️ Upgrading
+
+Railway template updates are opt-in — an existing deployment keeps running until you apply the update. See the [changelog](CHANGELOG.md) for what each update contains.
+
 ## 🔧 Variables
 
 ### Gateway service
