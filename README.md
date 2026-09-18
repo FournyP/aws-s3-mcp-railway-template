@@ -96,6 +96,7 @@ Railway template updates are opt-in — an existing deployment keeps running unt
 - **`/health` is unauthenticated** so Railway (and any uptime monitor) can probe without a token. Everything else requires `Authorization: Bearer <key>`.
 - **Invalid / missing token:** the gateway returns `401` with a `WWW-Authenticate: Bearer realm="aws-s3-mcp"` header.
 - **Do not expose the mcp service publicly.** All traffic should enter through the gateway.
+- **Gateway port:** nginx listens on `PORT`, which the IaC file pins to `80`. Railway injects a random `PORT` when the variable is unset, so if you create the gateway by hand and give its domain an explicit target port, set `PORT` to match or the edge gets `connection refused`.
 - Upstream repo: https://github.com/samuraikun/aws-s3-mcp
 
 ## ⚖️ License
