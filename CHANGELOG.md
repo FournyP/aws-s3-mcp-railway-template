@@ -4,6 +4,22 @@ Notable changes to this template. Entries are named after the aws-s3-mcp version
 ship, or after the change itself when a release only touches this template. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Gateway parity — 2026-09-18
+
+### Added
+
+- `PATH_KEY_AUTH=true` accepts the API key as a path segment (`/k/<key>/mcp`) for MCP
+  clients that cannot send an `Authorization` header. The key is checked against the same
+  `API_KEYS` list, then stripped before the request reaches the mcp service, and it
+  unlocks only `/mcp`.
+- A `/healthz` spelling of the health endpoint.
+
+### Changed
+
+- The gateway answers `/health` and `/healthz` itself instead of proxying them, so the
+  probe stays green while the mcp service restarts. This brings the gateway in line with
+  the postgres, grafana and paperclip MCP templates.
+
 ## Pinned gateway port — 2026-09-18
 
 ### Fixed

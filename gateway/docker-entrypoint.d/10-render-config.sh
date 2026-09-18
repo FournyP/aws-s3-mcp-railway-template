@@ -5,6 +5,7 @@ set -eu
 : "${MCP_HOST:=aws-s3-mcp.railway.internal}"
 : "${MCP_PORT:=3000}"
 : "${PORT:=80}"
+: "${PATH_KEY_AUTH:=false}"
 
 # Validate each key. Keys are interpolated into an nginx map regex, so we
 # restrict to characters that cannot break out of an alternation group.
@@ -30,11 +31,11 @@ fi
 export API_KEY_PATTERN
 
 # Railway private DNS (*.railway.internal) is IPv6-only; pick up the container's
-# nameserver from resolv.conf so nginx can resolve it. IPv6 addresses must be
-# wrapped in brackets for the nginx resolver directive (otherwise `:10` in
-# `fd12::10` is parsed as a port).
+# nameserver from resolv.conf so nginx can resolve it.
 RESOLVER=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)
 : "${RESOLVER:=127.0.0.11}"
+# nginx requires IPv6 resolver addresses wrapped in brackets (otherwise the
+# trailing `:xx` is parsed as a port). Railway's resolv.conf is IPv6.
 case "$RESOLVER" in
   *:*) RESOLVER="[$RESOLVER]" ;;
 esac
@@ -42,6 +43,19 @@ export RESOLVER
 
 export MCP_HOST MCP_PORT PORT
 
-envsubst '${API_KEY_PATTERN} ${RESOLVER} ${MCP_HOST} ${MCP_PORT} ${PORT}' \
-  < /etc/nginx/nginx.conf.template \
-  > /etc/nginx/nginx.conf
+VARS='${API_KEY_PATTERN} ${RESOLVER} ${MCP_HOST} ${MCP_PORT} ${PORT}'
+
+envsubst "$VARS" < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+
+# nginx has no config-level conditionals, so the keyed-path block is gated
+# here instead. The main config includes /etc/nginx/path-key.conf
+# unconditionally, so the file must exist either way — empty when disabled.
+case "$PATH_KEY_AUTH" in
+  1|true|TRUE|True|yes|YES)
+    echo "gateway: keyed-path entrypoint enabled (/k/<key>/mcp)" >&2
+    envsubst "$VARS" < /etc/nginx/path-key.conf.template > /etc/nginx/path-key.conf
+    ;;
+  *)
+    : > /etc/nginx/path-key.conf
+    ;;
+esac

@@ -14,39 +14,68 @@ http {
     listen ${PORT};
     client_max_body_size 16m;
 
-    # Unauthenticated health passthrough (used by Railway healthchecks).
+    # Gateway-side health for Railway probes — no proxy, no auth.
     location = /health {
-      set $upstream "http://${MCP_HOST}:${MCP_PORT}";
-      proxy_pass $upstream$request_uri;
+      access_log off;
+      return 200 "ok\n";
     }
 
-    # MCP clients probe OAuth discovery before falling back to static bearer auth.
-    # Return 404 so they skip OAuth and use the configured Authorization header.
-    location = /.well-known/oauth-protected-resource { access_log off; return 404; }
-    location = /.well-known/oauth-authorization-server { access_log off; return 404; }
-    location = /.well-known/openid-configuration { access_log off; return 404; }
-    location = /register { access_log off; return 404; }
+    # Same thing under the other common spelling, so a healthcheck path
+    # configured either way works without editing this file.
+    location = /healthz {
+      access_log off;
+      return 200 "ok\n";
+    }
+
+    # Return JSON 404 on OAuth discovery probes so clients fall back to bearer
+    # auth. Regex catches every variant (bare, /.well-known/.../mcp, /mcp/.well-known/...).
+    location ~ /\.well-known/ {
+      access_log off;
+      default_type application/json;
+      return 404 '{"error":"not_found"}';
+    }
+    location = /register {
+      access_log off;
+      default_type application/json;
+      return 404 '{"error":"not_found"}';
+    }
+
+    # Keyed-path entrypoint, rendered only when PATH_KEY_AUTH is enabled;
+    # otherwise this file is empty. See docker-entrypoint.d/10-render-config.sh.
+    include /etc/nginx/path-key.conf;
 
     location / {
       if ($auth_ok = 0) {
         add_header WWW-Authenticate 'Bearer realm="aws-s3-mcp"' always;
-        return 401;
+        add_header Content-Type 'application/json' always;
+        return 401 '{"error":"unauthorized"}';
       }
 
+      # `set` must precede `rewrite ... break` — `break` halts later rewrite-phase
+      # directives, leaving $upstream empty and breaking proxy_pass.
       set $upstream "http://${MCP_HOST}:${MCP_PORT}";
-      proxy_http_version 1.1;
 
-      # SSE / streamable HTTP
+      # aws-s3-mcp serves /mcp (streamable HTTP) and /sse (legacy SSE). Strip a
+      # trailing slash on /mcp rather than let the upstream 404 it.
+      rewrite ^/mcp/$ /mcp break;
+
+      proxy_http_version 1.1;
+      proxy_set_header Connection "";
+
+      # Long-lived streaming responses.
       proxy_buffering off;
       proxy_cache off;
       proxy_read_timeout 1h;
       proxy_send_timeout 1h;
 
+      # aws-s3-mcp serves over Hono and does not check Host, so the client's
+      # value passes through. Bearer auth here is the real security boundary.
       proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Host $host;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $scheme;
 
-      proxy_pass $upstream$request_uri;
+      proxy_pass $upstream$uri$is_args$args;
     }
   }
 }

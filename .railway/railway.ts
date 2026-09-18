@@ -53,7 +53,7 @@ export default defineRailway(() => {
     source: github(REPO, { branch: "main", rootDirectory: "gateway" }),
     build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
     deploy: {
-      // Proxied through unauthenticated, so it also checks the private hop.
+      // Answered by nginx, so it stays green while the mcp service restarts.
       healthcheckPath: "/health",
     },
     env: {
@@ -66,6 +66,9 @@ export default defineRailway(() => {
 
       MCP_HOST: mcp.env.RAILWAY_PRIVATE_DOMAIN,
       MCP_PORT,
+
+      // true also accepts /k/<key>/mcp, for clients that cannot send a header.
+      PATH_KEY_AUTH: process.env.PATH_KEY_AUTH ?? "false",
     },
   });
 

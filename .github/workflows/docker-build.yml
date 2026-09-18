@@ -52,28 +52,29 @@ jobs:
         run: |
           docker network create ci-net
           mkdir -p stub
-          # /health is proxied straight through to the upstream, so the stub
-          # has to answer it as well as the MCP route.
+          # The real upstream answers on /mcp, so the stub must too. Serving
+          # only / would make every proxied request 404 and the assertions
+          # below would be testing nothing.
           printf 'upstream root\n' > stub/index.html
           printf 'upstream mcp\n' > stub/mcp
-          printf 'upstream health\n' > stub/health
           docker run -d --name mcp --network ci-net \
             -v "$PWD/stub:/usr/share/nginx/html:ro" \
             nginx:1.29.8-alpine
 
-      - name: Start gateway
+      - name: Start gateway with the keyed path enabled
         run: |
           docker run -d --name gw --network ci-net \
             -e API_KEYS=goodkeyone,goodkeytwo \
+            -e PATH_KEY_AUTH=true \
             -e MCP_HOST=mcp \
             -e MCP_PORT=80 \
             -e PORT=8080 \
             -p 8080:8080 gateway:ci
           for i in $(seq 1 30); do
-            curl -fsS http://localhost:8080/health >/dev/null 2>&1 && break
+            curl -fsS http://localhost:8080/healthz >/dev/null 2>&1 && break
             sleep 1
           done
-          curl -fsS http://localhost:8080/health >/dev/null
+          curl -fsS http://localhost:8080/healthz >/dev/null
 
       - name: nginx config is valid
         run: docker exec gw nginx -t
@@ -83,30 +84,60 @@ jobs:
           set -eu
           code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
-          echo "health is unauthenticated and proxied to the upstream"
+          echo "both health spellings are open"
           [ "$(code http://localhost:8080/health)" = 200 ]
-          curl -s http://localhost:8080/health | grep -q 'upstream health'
+          [ "$(code http://localhost:8080/healthz)" = 200 ]
 
-          echo "no credential is rejected"
+          echo "bare /mcp with no credential is rejected"
           [ "$(code http://localhost:8080/mcp)" = 401 ]
 
-          echo "a bad bearer is rejected"
+          echo "bare /mcp with a bad bearer is rejected"
           [ "$(code -H 'Authorization: Bearer nope' http://localhost:8080/mcp)" = 401 ]
 
-          echo "a good bearer reaches the upstream"
+          echo "bare /mcp with a good bearer reaches the upstream"
           [ "$(code -H 'Authorization: Bearer goodkeyone' http://localhost:8080/mcp)" = 200 ]
           curl -s -H 'Authorization: Bearer goodkeyone' http://localhost:8080/mcp | grep -q 'upstream mcp'
 
-          echo "the second key works too"
-          [ "$(code -H 'Authorization: Bearer goodkeytwo' http://localhost:8080/mcp)" = 200 ]
+          echo "keyed path with no key at all is rejected"
+          [ "$(code http://localhost:8080/k//mcp)" = 401 ]
 
-          echo "OAuth discovery is 404 so clients fall back to bearer auth"
-          for p in /.well-known/oauth-protected-resource \
-                   /.well-known/oauth-authorization-server \
-                   /.well-known/openid-configuration \
-                   /register; do
-            [ "$(code "http://localhost:8080$p")" = 404 ]
+          echo "keyed path with a bad key is rejected"
+          [ "$(code http://localhost:8080/k/nope/mcp)" = 401 ]
+
+          echo "keyed path with a good key reaches the upstream"
+          [ "$(code http://localhost:8080/k/goodkeytwo/mcp)" = 200 ]
+
+          echo "keyed path lands on /mcp upstream, not on the key segment"
+          curl -s http://localhost:8080/k/goodkeytwo/mcp | grep -q 'upstream mcp'
+
+          echo "a valid key does not unlock any other path"
+          [ "$(code http://localhost:8080/k/goodkeyone/tools)" = 401 ]
+          [ "$(code http://localhost:8080/k/goodkeyone/)" = 401 ]
+
+      - name: Keyed path is off by default
+        run: |
+          set -eu
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+
+          docker run -d --name gw-default --network ci-net \
+            -e API_KEYS=goodkeyone \
+            -e MCP_HOST=mcp \
+            -e MCP_PORT=80 \
+            -e PORT=8080 \
+            -p 8081:8080 gateway:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8081/healthz >/dev/null 2>&1 && break
+            sleep 1
           done
+
+          echo "the empty include still yields a valid config"
+          docker exec gw-default nginx -t
+
+          echo "a good key in the path is rejected when PATH_KEY_AUTH is unset"
+          [ "$(code http://localhost:8081/k/goodkeyone/mcp)" = 401 ]
+
+          echo "the header form is unaffected"
+          [ "$(code -H 'Authorization: Bearer goodkeyone' http://localhost:8081/mcp)" = 200 ]
 
       - name: Invalid API_KEYS characters are refused at startup
         run: |
@@ -148,4 +179,5 @@ jobs:
         if: failure()
         run: |
           docker logs gw || true
+          docker logs gw-default || true
           docker logs gw-meta || true
