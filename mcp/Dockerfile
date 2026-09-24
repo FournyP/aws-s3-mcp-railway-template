@@ -1,3 +1,4 @@
+# renovate: datasource=github-tags depName=samuraikun/aws-s3-mcp
 ARG AWS_S3_MCP_VERSION=v0.4.0
 
 FROM node:20-alpine AS builder
