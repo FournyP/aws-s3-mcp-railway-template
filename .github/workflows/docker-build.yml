@@ -1,5 +1,6 @@
 # Builds both images this template ships (gateway and mcp) on every PR and on
-# main, and exercises the gateway's runtime-rendered nginx config.
+# main, boots the mcp server against a local S3 gateway, and exercises the
+# gateway's runtime-rendered nginx config.
 name: docker-build
 
 on:
@@ -28,6 +29,138 @@ jobs:
           load: false
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # A successful image build says nothing about the server starting on the
+  # pinned Node version, so this job boots the real mcp image against a local
+  # S3 gateway and drives it over MCP: list the bucket, read a text object, and
+  # read a PDF, which goes through pdf-parse.
+  mcp-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build mcp image locally
+        uses: docker/build-push-action@v7
+        with:
+          context: mcp
+          push: false
+          load: true
+          tags: mcp:ci
+          cache-from: type=gha,scope=mcp
+
+      - name: Start an S3 gateway with objects in it
+        run: |
+          set -eu
+          docker network create ci-net
+          docker run -d --name s3gw --network ci-net \
+            -e ROOT_ACCESS_KEY=ciaccesskey \
+            -e ROOT_SECRET_KEY=cisecretkey \
+            -p 9000:9000 \
+            versity/versitygw:v1.8.0 --port :9000 posix /tmp/vgw
+          # Any HTTP answer means it is up; anonymous requests get a 403.
+          for i in $(seq 1 30); do
+            curl -s -o /dev/null http://localhost:9000/ && break
+            sleep 1
+          done
+
+          printf 'hello from the bucket\n' > hello.txt
+          # A one-page PDF whose text layer reads "hello from a pdf", with the
+          # xref offsets computed so pdf-parse does not need to repair it.
+          python3 - <<'PY'
+          objs = [
+              b"<< /Type /Catalog /Pages 2 0 R >>",
+              b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+              b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] "
+              b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+              None,
+              b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+          ]
+          text = b"BT /F1 18 Tf 20 40 Td (hello from a pdf) Tj ET"
+          objs[3] = b"<< /Length %d >>\nstream\n" % len(text) + text + b"\nendstream"
+          out, offsets = bytearray(b"%PDF-1.4\n"), []
+          for n, body in enumerate(objs, 1):
+              offsets.append(len(out))
+              out += b"%d 0 obj\n" % n + body + b"\nendobj\n"
+          xref = len(out)
+          out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+          out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+          out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+          open("hello.pdf", "wb").write(out)
+          PY
+
+          docker run --rm --network ci-net -v "$PWD:/w" -w /w \
+            -e AWS_ACCESS_KEY_ID=ciaccesskey \
+            -e AWS_SECRET_ACCESS_KEY=cisecretkey \
+            -e AWS_DEFAULT_REGION=us-east-1 \
+            --entrypoint sh amazon/aws-cli:2.37.2 -c '
+              aws --endpoint-url http://s3gw:9000 s3 mb s3://ci-bucket &&
+              aws --endpoint-url http://s3gw:9000 s3 cp hello.txt s3://ci-bucket/hello.txt &&
+              aws --endpoint-url http://s3gw:9000 s3 cp hello.pdf s3://ci-bucket/hello.pdf'
+
+      - name: Start mcp
+        run: |
+          set -eu
+          docker run -d --name mcp --network ci-net \
+            -e AWS_ACCESS_KEY_ID=ciaccesskey \
+            -e AWS_SECRET_ACCESS_KEY=cisecretkey \
+            -e AWS_REGION=us-east-1 \
+            -e AWS_ENDPOINT=http://s3gw:9000 \
+            -e AWS_S3_FORCE_PATH_STYLE=true \
+            -e S3_BUCKETS=ci-bucket \
+            -e PORT=3000 \
+            -p 3000:3000 mcp:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3000/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://localhost:3000/health | grep -q '"ok"'
+
+      - name: Assertions
+        run: |
+          set -eu
+          # Responses come back as SSE; keep only the JSON of the data lines.
+          call() {
+            curl -sS -D headers.txt -X POST http://localhost:3000/mcp \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              ${SESSION:+-H "mcp-session-id: $SESSION"} \
+              -d "$1" | sed -n 's/^data: //p'
+          }
+
+          echo "initialize succeeds and opens a session"
+          call '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            | grep -q '"serverInfo"'
+          SESSION=$(tr -d '\r' < headers.txt | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')
+          [ -n "$SESSION" ]
+          curl -sS -o /dev/null -X POST http://localhost:3000/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -H "mcp-session-id: $SESSION" \
+            -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+          echo "the three tools are listed"
+          tools=$(call '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
+          for t in list-buckets list-objects get-object; do echo "$tools" | grep -q "\"$t\""; done
+
+          echo "list-objects sees both objects through the S3 client"
+          objects=$(call '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list-objects","arguments":{"bucket":"ci-bucket"}}}')
+          echo "$objects" | grep -q 'hello.txt'
+          echo "$objects" | grep -q 'hello.pdf'
+
+          echo "get-object returns a text object"
+          call '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get-object","arguments":{"bucket":"ci-bucket","key":"hello.txt"}}}' \
+            | grep -q 'hello from the bucket'
+
+          echo "get-object extracts the text of a PDF"
+          call '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get-object","arguments":{"bucket":"ci-bucket","key":"hello.pdf"}}}' \
+            | grep -q 'hello from a pdf'
+
+      - name: mcp logs on failure
+        if: failure()
+        run: |
+          docker logs mcp || true
+          docker logs s3gw || true
 
   # The gateway's nginx config is rendered at container start, not at build
   # time, so a broken template passes the image build and only fails once it
