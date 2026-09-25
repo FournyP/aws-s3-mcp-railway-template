@@ -89,10 +89,13 @@ jobs:
           open("hello.pdf", "wb").write(out)
           PY
 
+          # Plain uploads: the gateway would otherwise keep aws-cli's chunked
+          # checksum framing in the object, which corrupts the PDF.
           docker run --rm --network ci-net -v "$PWD:/w" -w /w \
             -e AWS_ACCESS_KEY_ID=ciaccesskey \
             -e AWS_SECRET_ACCESS_KEY=cisecretkey \
             -e AWS_DEFAULT_REGION=us-east-1 \
+            -e AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
             --entrypoint sh amazon/aws-cli:2.37.2 -c '
               aws --endpoint-url http://s3gw:9000 s3 mb s3://ci-bucket &&
               aws --endpoint-url http://s3gw:9000 s3 cp hello.txt s3://ci-bucket/hello.txt &&
