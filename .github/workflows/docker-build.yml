@@ -66,10 +66,11 @@ jobs:
 
           printf 'hello from the bucket\n' > hello.txt
           # A one-page PDF whose text layer reads "hello from a pdf", with the
-          # xref offsets computed so pdf-parse does not need to repair it. Kept
-          # under 4 KB on purpose: Node hands buffers that small out of a shared
-          # pool, and pdf-parse on Node 20 then reads the wrong bytes and fails
-          # with "bad XRef entry". Node 24 reads them correctly.
+          # xref offsets computed so pdf-parse does not need to repair it.
+          # Padded past 4 KB: Node hands smaller buffers out of a shared pool,
+          # and upstream's pdf-parse then reads the wrong bytes ("bad XRef
+          # entry") on every Node version. That is an upstream bug, not
+          # something this test can catch a regression in.
           python3 - <<'PY'
           objs = [
               b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -81,7 +82,7 @@ jobs:
           ]
           text = b"BT /F1 18 Tf 20 40 Td (hello from a pdf) Tj ET"
           objs[3] = b"<< /Length %d >>\nstream\n" % len(text) + text + b"\nendstream"
-          out, offsets = bytearray(b"%PDF-1.4\n"), []
+          out, offsets = bytearray(b"%PDF-1.4\n%" + b"x" * 5000 + b"\n"), []
           for n, body in enumerate(objs, 1):
               offsets.append(len(out))
               out += b"%d 0 obj\n" % n + body + b"\nendobj\n"
