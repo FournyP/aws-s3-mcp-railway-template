@@ -66,7 +66,10 @@ jobs:
 
           printf 'hello from the bucket\n' > hello.txt
           # A one-page PDF whose text layer reads "hello from a pdf", with the
-          # xref offsets computed so pdf-parse does not need to repair it.
+          # xref offsets computed so pdf-parse does not need to repair it. Kept
+          # under 4 KB on purpose: Node hands buffers that small out of a shared
+          # pool, and pdf-parse on Node 20 then reads the wrong bytes and fails
+          # with "bad XRef entry". Node 24 reads them correctly.
           python3 - <<'PY'
           objs = [
               b"<< /Type /Catalog /Pages 2 0 R >>",
