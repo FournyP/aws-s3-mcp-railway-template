@@ -119,13 +119,19 @@ jobs:
       - name: Assertions
         run: |
           set -eu
-          # Responses come back as SSE; keep only the JSON of the data lines.
+          # A response is either plain JSON or SSE; keep only the JSON of the
+          # data lines in the SSE case. Each body is echoed so a failed grep
+          # shows what the server actually said.
           call() {
-            curl -sS -D headers.txt -X POST http://localhost:3000/mcp \
+            body=$(curl -sS -D headers.txt -X POST http://localhost:3000/mcp \
               -H 'Content-Type: application/json' \
               -H 'Accept: application/json, text/event-stream' \
               ${SESSION:+-H "mcp-session-id: $SESSION"} \
-              -d "$1" | sed -n 's/^data: //p'
+              -d "$1")
+            if printf '%s\n' "$body" | grep -q '^data: '; then
+              body=$(printf '%s\n' "$body" | sed -n 's/^data: //p')
+            fi
+            printf '%s\n' "$body" | tee -a responses.log
           }
 
           echo "initialize succeeds and opens a session"
@@ -159,6 +165,7 @@ jobs:
       - name: mcp logs on failure
         if: failure()
         run: |
+          cat headers.txt responses.log || true
           docker logs mcp || true
           docker logs s3gw || true
 
