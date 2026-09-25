@@ -1,7 +1,7 @@
 # renovate: datasource=github-tags depName=samuraikun/aws-s3-mcp
 ARG AWS_S3_MCP_VERSION=v0.4.0
 
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 RUN apk add --no-cache git python3 make g++
 
@@ -13,7 +13,7 @@ RUN git clone --depth 1 --branch ${AWS_S3_MCP_VERSION} https://github.com/samura
 RUN npm ci --ignore-scripts && npm run build
 
 
-FROM node:20-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 
