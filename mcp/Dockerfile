@@ -10,6 +10,11 @@ WORKDIR /src
 ARG AWS_S3_MCP_VERSION
 RUN git clone --depth 1 --branch ${AWS_S3_MCP_VERSION} https://github.com/samuraikun/aws-s3-mcp.git .
 
+# pdf-parse 1.1.1 misreads a Node Buffer ("bad XRef entry"); a Uint8Array
+# parses. The grep fails the build if upstream changes this line.
+RUN sed -i 's/await pdfParse(buffer)/await pdfParse(new Uint8Array(buffer) as unknown as Buffer)/' src/resources/s3.ts \
+ && grep -qF 'pdfParse(new Uint8Array(buffer) as unknown as Buffer)' src/resources/s3.ts
+
 RUN npm ci --ignore-scripts && npm run build
 
 
